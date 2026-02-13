@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Derive build metadata
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          COMMIT="$(git rev-parse --short HEAD)"
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          GOOS="$(go env GOOS)"
+          GOARCH="$(go env GOARCH)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "build_date=${BUILD_DATE}" >> "$GITHUB_OUTPUT"
+          echo "goos=${GOOS}" >> "$GITHUB_OUTPUT"
+          echo "goarch=${GOARCH}" >> "$GITHUB_OUTPUT"
+
+      - name: Run tests
+        run: make test
+
+      - name: Build artifacts
+        run: |
+          make build \
+            VERSION="${{ steps.meta.outputs.version }}" \
+            COMMIT="${{ steps.meta.outputs.commit }}" \
+            BUILD_DATE="${{ steps.meta.outputs.build_date }}" \
+            BUILT_BY="github-actions"
+
+      - name: Package release assets
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          TARGET="${{ steps.meta.outputs.goos }}_${{ steps.meta.outputs.goarch }}"
+          mkdir -p release
+
+          cp dist/dotward "release/dotward_${VERSION}_${TARGET}"
+          chmod +x "release/dotward_${VERSION}_${TARGET}"
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            dist/Dotward.app \
+            "release/Dotward_${VERSION}_${TARGET}.app.zip"
+
+          shasum -a 256 release/* > "release/sha256sums_${VERSION}.txt"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/dotward_*
+            release/Dotward_*.app.zip
+            release/sha256sums_*.txt
+          generate_release_notes: true
