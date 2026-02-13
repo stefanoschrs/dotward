@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/rpc"
 	"os"
@@ -15,8 +16,9 @@ import (
 
 // Manager exposes daemon RPC methods.
 type Manager struct {
-	state *core.State
-	cfg   core.Config
+	state    *core.State
+	cfg      core.Config
+	notifier Notifier
 }
 
 // Register starts watching a plaintext file.
@@ -36,6 +38,11 @@ func (m *Manager) Register(req ipc.Request, resp *ipc.Response) error {
 		resp.Success = false
 		resp.Error = fmt.Sprintf("failed to save state: %v", err)
 		return nil
+	}
+	if m.notifier != nil {
+		if err := m.notifier.FileUnlocked(req.Path, ttl); err != nil {
+			log.Printf("failed to send unlocked notification for %q: %v", req.Path, err)
+		}
 	}
 	resp.Success = true
 	return nil
@@ -83,7 +90,7 @@ func (m *Manager) StopWatching(req ipc.Request, resp *ipc.Response) error {
 	return nil
 }
 
-func startRPCServer(cfg core.Config, state *core.State) (func() error, error) {
+func startRPCServer(cfg core.Config, state *core.State, notifier Notifier) (func() error, error) {
 	if err := os.Remove(cfg.SockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("failed to remove old socket %q: %w", cfg.SockPath, err)
 	}
@@ -93,7 +100,7 @@ func startRPCServer(cfg core.Config, state *core.State) (func() error, error) {
 		return nil, fmt.Errorf("failed to create socket dir %q: %w", dir, err)
 	}
 
-	manager := &Manager{state: state, cfg: cfg}
+	manager := &Manager{state: state, cfg: cfg, notifier: notifier}
 	server := rpc.NewServer()
 	if err := server.RegisterName("Manager", manager); err != nil {
 		return nil, fmt.Errorf("failed to register rpc manager: %w", err)

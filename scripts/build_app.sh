@@ -57,7 +57,7 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
 	<key>CFBundleExecutable</key>
 	<string>Dotward</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.yourname.dotward</string>
+	<string>com.stefanoschrs.dotward</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleVersion</key>

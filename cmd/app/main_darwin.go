@@ -63,15 +63,11 @@ func main() {
 		tickerDone:  make(chan struct{}),
 	}
 
-	stopRPC, err := startRPCServer(cfg, state)
+	stopRPC, err := startRPCServer(cfg, state, notifier)
 	if err != nil {
 		log.Fatalf("failed to start rpc server: %v", err)
 	}
 	a.stopRPC = stopRPC
-
-	if err := a.notifier.Init(a.extendCh); err != nil {
-		log.Fatalf("failed to initialize notifications: %v", err)
-	}
 
 	systray.Run(a.onReady, a.onExit)
 }
@@ -79,6 +75,9 @@ func main() {
 func (a *app) onReady() {
 	systray.SetTitle("")
 	systray.SetTooltip("Dotward is monitoring unlocked secret files")
+	if err := a.notifier.Init(a.extendCh); err != nil {
+		log.Printf("failed to initialize notifications: %v", err)
+	}
 
 	a.statusItem = systray.AddMenuItem("Status: monitoring 0 files", "Current status")
 	a.statusItem.Disable()

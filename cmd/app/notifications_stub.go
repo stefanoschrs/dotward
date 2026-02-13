@@ -18,6 +18,10 @@ func (n *noopNotifier) Warn(_ string, _ time.Time) error {
 	return nil
 }
 
+func (n *noopNotifier) FileUnlocked(_ string, _ time.Duration) error {
+	return nil
+}
+
 func (n *noopNotifier) FileDeleted(_ string) error {
 	return nil
 }

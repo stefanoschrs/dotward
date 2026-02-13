@@ -9,6 +9,7 @@ package main
 #include <stdlib.h>
 void DotwardInitNotifications(void);
 int DotwardSendExpiryNotification(const char *path, const char *title, const char *body);
+int DotwardSendUnlockedNotification(const char *path, const char *title, const char *body);
 int DotwardSendDeletedNotification(const char *path, const char *title, const char *body);
 */
 import "C"
@@ -52,6 +53,22 @@ func (n *darwinNotifier) Warn(path string, expiresAt time.Time) error {
 
 	if C.DotwardSendExpiryNotification(cpath, title, body) == 0 {
 		return fmt.Errorf("failed to enqueue warning notification for %q", path)
+	}
+	return nil
+}
+
+func (n *darwinNotifier) FileUnlocked(path string, ttl time.Duration) error {
+	title := C.CString("Dotward File Unlocked")
+	defer C.free(unsafe.Pointer(title))
+
+	body := C.CString(fmt.Sprintf("%s unlocked. Expires in %s.", filepath.Base(path), ttl))
+	defer C.free(unsafe.Pointer(body))
+
+	cpath := C.CString(path)
+	defer C.free(unsafe.Pointer(cpath))
+
+	if C.DotwardSendUnlockedNotification(cpath, title, body) == 0 {
+		return fmt.Errorf("failed to enqueue unlocked notification for %q", path)
 	}
 	return nil
 }

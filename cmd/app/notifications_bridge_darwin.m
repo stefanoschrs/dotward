@@ -45,7 +45,7 @@ void DotwardInitNotifications(void) {
         UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
 
         UNNotificationAction *extendAction = [UNNotificationAction actionWithIdentifier:@"EXTEND_ACTION"
-                                                                                   title:@"Extend 1 Hour"
+                                                                                   title:@"Extend Session"
                                                                                  options:UNNotificationActionOptionNone];
 
         UNNotificationCategory *category = [UNNotificationCategory categoryWithIdentifier:@"EXPIRY_WARNING"
@@ -57,31 +57,24 @@ void DotwardInitNotifications(void) {
         dotwardDelegate = [DotwardDelegate new];
         [center setDelegate:dotwardDelegate];
 
-        [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
-                              completionHandler:^(BOOL granted, NSError * _Nullable error) {
-            (void)granted;
-            (void)error;
-        }];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound | UNAuthorizationOptionBadge)
+                                  completionHandler:^(BOOL granted, NSError * _Nullable error) {
+                (void)error;
+                if (granted) {
+                    UNMutableNotificationContent *content = [UNMutableNotificationContent new];
+                    content.title = @"Dotward Ready";
+                    content.body = @"Notifications are enabled.";
+                    content.sound = [UNNotificationSound defaultSound];
+                    UNTimeIntervalNotificationTrigger *trigger =
+                        [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:1 repeats:NO];
+                    UNNotificationRequest *request =
+                        [UNNotificationRequest requestWithIdentifier:@"dotward-startup" content:content trigger:trigger];
+                    [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:request withCompletionHandler:nil];
+                }
+            }];
+        });
     }
-}
-
-static BOOL DotwardNotificationsAuthorized(void) {
-    __block BOOL allowed = NO;
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    [[UNUserNotificationCenter currentNotificationCenter]
-        getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings) {
-            if (settings.authorizationStatus == UNAuthorizationStatusAuthorized ||
-                settings.authorizationStatus == UNAuthorizationStatusProvisional) {
-                allowed = YES;
-            }
-            dispatch_semaphore_signal(sem);
-        }];
-    dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC));
-    long waitResult = dispatch_semaphore_wait(sem, timeout);
-    if (waitResult != 0) {
-        return NO;
-    }
-    return allowed;
 }
 
 static NSString *DotwardIdentifier(NSString *prefix, NSString *path) {
@@ -98,12 +91,6 @@ static NSString *DotwardIdentifier(NSString *prefix, NSString *path) {
 }
 
 static int DotwardSendNotification(NSString *identifier, UNMutableNotificationContent *content) {
-    if (!DotwardNotificationsAuthorized()) {
-        return 0;
-    }
-
-    __block BOOL ok = YES;
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     UNTimeIntervalNotificationTrigger *trigger =
         [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:1 repeats:NO];
     UNNotificationRequest *request =
@@ -112,18 +99,9 @@ static int DotwardSendNotification(NSString *identifier, UNMutableNotificationCo
     [[UNUserNotificationCenter currentNotificationCenter]
         addNotificationRequest:request
           withCompletionHandler:^(NSError * _Nullable error) {
-              if (error != nil) {
-                  ok = NO;
-              }
-              dispatch_semaphore_signal(sem);
+              (void)error;
           }];
-
-    dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC));
-    long waitResult = dispatch_semaphore_wait(sem, timeout);
-    if (waitResult != 0) {
-        return 0;
-    }
-    return ok ? 1 : 0;
+    return 1;
 }
 
 int DotwardSendExpiryNotification(const char *path, const char *title, const char *body) {
@@ -141,6 +119,22 @@ int DotwardSendExpiryNotification(const char *path, const char *title, const cha
         content.userInfo = @{ @"path": pathStr };
 
         NSString *identifier = DotwardIdentifier(@"expiry-warning", pathStr);
+        return DotwardSendNotification(identifier, content);
+    }
+}
+
+int DotwardSendUnlockedNotification(const char *path, const char *title, const char *body) {
+    @autoreleasepool {
+        if (path == NULL || title == NULL || body == NULL) {
+            return 0;
+        }
+        UNMutableNotificationContent *content = [UNMutableNotificationContent new];
+        content.title = [NSString stringWithUTF8String:title];
+        content.body = [NSString stringWithUTF8String:body];
+        content.sound = [UNNotificationSound defaultSound];
+
+        NSString *pathStr = [NSString stringWithUTF8String:path];
+        NSString *identifier = DotwardIdentifier(@"unlocked", pathStr);
         return DotwardSendNotification(identifier, content);
     }
 }
