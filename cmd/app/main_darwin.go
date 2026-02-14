@@ -24,6 +24,7 @@ type app struct {
 	fileItems    []*systray.MenuItem
 	filePaths    []string
 	fileClickCh  chan int
+	wakeCh       chan struct{}
 	quitItem     *systray.MenuItem
 	versionItem  *systray.MenuItem
 	stopRPC      func() error
@@ -59,6 +60,7 @@ func main() {
 		fileItems:   make([]*systray.MenuItem, 0, maxFileMenuItems),
 		filePaths:   make([]string, maxFileMenuItems),
 		fileClickCh: make(chan int, 32),
+		wakeCh:      make(chan struct{}, 8),
 		tickerStop:  make(chan struct{}),
 		tickerDone:  make(chan struct{}),
 	}
@@ -77,6 +79,9 @@ func (a *app) onReady() {
 	systray.SetTooltip("Dotward is monitoring unlocked secret files")
 	if err := a.notifier.Init(a.extendCh); err != nil {
 		log.Printf("failed to initialize notifications: %v", err)
+	}
+	if err := initWakeMonitor(a.wakeCh); err != nil {
+		log.Printf("failed to initialize wake monitor: %v", err)
 	}
 
 	a.statusItem = systray.AddMenuItem("Status: monitoring 0 files", "Current status")
@@ -149,6 +154,9 @@ func (a *app) loop() {
 					log.Printf("failed to save state after extension for %q: %v", path, err)
 				}
 			}
+			a.updateStatus()
+		case <-a.wakeCh:
+			a.checkFiles(time.Now())
 			a.updateStatus()
 		case idx := <-a.fileClickCh:
 			a.removeWatchedFileByIndex(idx)
