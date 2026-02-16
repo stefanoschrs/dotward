@@ -6,7 +6,7 @@ package main
 #cgo CFLAGS: -fobjc-arc
 #cgo LDFLAGS: -framework Foundation -framework AppKit
 
-void DotwardRegisterWakeObserver(void);
+void DotwardRegisterRuntimeObservers(void);
 */
 import "C"
 
@@ -21,7 +21,7 @@ func initWakeMonitor(ch chan<- struct{}) error {
 	wakeMu.Lock()
 	wakeSignalCh = ch
 	wakeMu.Unlock()
-	C.DotwardRegisterWakeObserver()
+	C.DotwardRegisterRuntimeObservers()
 	return nil
 }
 

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"sort"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/getlantern/systray"
@@ -83,6 +85,7 @@ func (a *app) onReady() {
 	if err := initWakeMonitor(a.wakeCh); err != nil {
 		log.Printf("failed to initialize wake monitor: %v", err)
 	}
+	a.installSignalHandler()
 
 	a.statusItem = systray.AddMenuItem("Status: monitoring 0 files", "Current status")
 	a.statusItem.Disable()
@@ -131,6 +134,7 @@ func (a *app) onExit() {
 			log.Printf("rpc shutdown error: %v", err)
 		}
 	}
+	a.lockAllWatchedFilesOnExit()
 	if err := a.notifier.Shutdown(); err != nil {
 		log.Printf("notification shutdown error: %v", err)
 	}
@@ -264,4 +268,41 @@ func (a *app) removeWatchedFileByIndex(idx int) {
 		log.Printf("failed to send delete notification for %q: %v", path, err)
 	}
 	a.updateStatus()
+}
+
+func (a *app) installSignalHandler() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		select {
+		case <-a.tickerStop:
+			signal.Stop(ch)
+		case <-ch:
+			systray.Quit()
+			signal.Stop(ch)
+		}
+	}()
+}
+
+func (a *app) lockAllWatchedFilesOnExit() {
+	files := a.state.Snapshot()
+	if len(files) == 0 {
+		return
+	}
+
+	changed := false
+	for path := range files {
+		if err := core.SecureDelete(path); err != nil && !os.IsNotExist(err) {
+			log.Printf("failed to delete watched file during shutdown %q: %v", path, err)
+			continue
+		}
+		a.state.StopWatching(path)
+		changed = true
+	}
+
+	if changed {
+		if err := a.state.Save(a.cfg.StatePath); err != nil {
+			log.Printf("failed to save state during shutdown lock: %v", err)
+		}
+	}
 }

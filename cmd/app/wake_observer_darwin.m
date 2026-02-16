@@ -4,18 +4,43 @@
 extern void HandleSystemWake(void);
 
 static id dotwardWakeObserver;
+static id dotwardClockObserver;
+static id dotwardDayObserver;
 
-void DotwardRegisterWakeObserver(void) {
+void DotwardRegisterRuntimeObservers(void) {
     @autoreleasepool {
-        NSNotificationCenter *center = [[NSWorkspace sharedWorkspace] notificationCenter];
+        NSNotificationCenter *workspaceCenter = [[NSWorkspace sharedWorkspace] notificationCenter];
+        NSNotificationCenter *defaultCenter = [NSNotificationCenter defaultCenter];
+
         if (dotwardWakeObserver != nil) {
-            [center removeObserver:dotwardWakeObserver];
+            [workspaceCenter removeObserver:dotwardWakeObserver];
             dotwardWakeObserver = nil;
         }
-        dotwardWakeObserver = [center addObserverForName:NSWorkspaceDidWakeNotification
-                                                  object:nil
-                                                   queue:[NSOperationQueue mainQueue]
-                                              usingBlock:^(__unused NSNotification *note) {
+        if (dotwardClockObserver != nil) {
+            [defaultCenter removeObserver:dotwardClockObserver];
+            dotwardClockObserver = nil;
+        }
+        if (dotwardDayObserver != nil) {
+            [defaultCenter removeObserver:dotwardDayObserver];
+            dotwardDayObserver = nil;
+        }
+
+        dotwardWakeObserver = [workspaceCenter addObserverForName:NSWorkspaceDidWakeNotification
+                                                           object:nil
+                                                            queue:[NSOperationQueue mainQueue]
+                                                       usingBlock:^(__unused NSNotification *note) {
+            HandleSystemWake();
+        }];
+        dotwardClockObserver = [defaultCenter addObserverForName:NSSystemClockDidChangeNotification
+                                                          object:nil
+                                                           queue:[NSOperationQueue mainQueue]
+                                                      usingBlock:^(__unused NSNotification *note) {
+            HandleSystemWake();
+        }];
+        dotwardDayObserver = [defaultCenter addObserverForName:NSCalendarDayChangedNotification
+                                                        object:nil
+                                                         queue:[NSOperationQueue mainQueue]
+                                                    usingBlock:^(__unused NSNotification *note) {
             HandleSystemWake();
         }];
     }
