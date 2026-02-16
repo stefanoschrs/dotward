@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
+    runs-on: macos-latest
 
     steps:
       - name: Checkout
@@ -67,7 +67,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release/dotward_*
-            release/Dotward_*.app.zip
-            release/sha256sums_*.txt
+            release/dotward_${{ steps.meta.outputs.version }}_${{ steps.meta.outputs.goos }}_${{ steps.meta.outputs.goarch }}
+            release/Dotward_${{ steps.meta.outputs.version }}_${{ steps.meta.outputs.goos }}_${{ steps.meta.outputs.goarch }}.app.zip
+            release/sha256sums_${{ steps.meta.outputs.version }}.txt
           generate_release_notes: true
