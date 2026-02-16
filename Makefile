@@ -4,6 +4,8 @@ ROOT := $(CURDIR)
 DIST_DIR := $(ROOT)/dist
 CLI_BIN := $(DIST_DIR)/dotward
 APP_BUNDLE := $(DIST_DIR)/Dotward.app
+APP_INSTALL_DIR ?= /Applications
+APP_INSTALL_PATH := $(APP_INSTALL_DIR)/Dotward.app
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -17,7 +19,7 @@ ifeq ($(strip $(GOBIN)),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build build-cli build-app test install clean fmt
+.PHONY: build build-cli build-app test install install-cli install-app clean fmt
 
 build: build-cli build-app
 
@@ -31,12 +33,26 @@ build-app:
 test:
 	go test ./...
 
-install:
+install: install-cli install-app
+
+install-cli:
 	@mkdir -p "$(GOBIN)"
 	@mkdir -p "$(DIST_DIR)"
 	go build -trimpath -ldflags "$(LDFLAGS)" -o "$(CLI_BIN)" ./cmd/cli
 	cp "$(CLI_BIN)" "$(GOBIN)/dotward"
 	@echo "Installed dotward to $(GOBIN)/dotward"
+
+install-app: build-app
+	@if pgrep -x "Dotward" >/dev/null 2>&1; then \
+		echo "Stopping running Dotward.app..."; \
+		osascript -e 'tell application "Dotward" to quit' >/dev/null 2>&1 || true; \
+		pkill -x "Dotward" >/dev/null 2>&1 || true; \
+		sleep 1; \
+	fi
+	@rm -rf "$(APP_INSTALL_PATH)"
+	cp -R "$(APP_BUNDLE)" "$(APP_INSTALL_PATH)"
+	open "$(APP_INSTALL_PATH)"
+	@echo "Installed and launched $(APP_INSTALL_PATH)"
 
 fmt:
 	gofmt -w $$(rg --files -g '*.go')
