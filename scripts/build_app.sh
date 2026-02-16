@@ -72,4 +72,6 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
 </plist>
 PLIST
 
+codesign --force --deep --sign - "${MACOS_DIR}/${APP_NAME}"
+
 echo "Built ${BUNDLE_DIR}"
