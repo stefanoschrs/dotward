@@ -1,5 +1,12 @@
 # Dotward
 
+<p align="center">
+    <picture>
+        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/stefanoschrs/dotward/master/AppIcons/Assets.xcassets/AppIcon.appiconset/128.png">
+        <img src="https://raw.githubusercontent.com/stefanoschrs/dotward/master/AppIcons/Assets.xcassets/AppIcon.appiconset/128.png" alt="Dotward" width="128">
+    </picture>
+</p>
+
 **Dotward** is a macOS security tool for **Just-In-Time (JIT) access** to local secret files (like `.env`).
 
 It bridges the gap between security and convenience by keeping your secrets encrypted at rest (`.env.enc`) and only decrypting them temporarily when you are actually working. A background menu bar app monitors these files and **automatically deletes them** when their time expires.
