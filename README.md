@@ -91,7 +91,7 @@ You can customize the default Time-To-Live (TTL) by creating a config file at `~
 
 ## Batch Operations
 
-If you have many microservices, you can lock them all at once using a batch list.
+If you have many microservices, you can lock or unlock them all at once using a batch list.
 
 1. Create a file `targets.txt` with absolute paths:
 ```text
@@ -101,9 +101,15 @@ If you have many microservices, you can lock them all at once using a batch list
 ```
 
 
-2. Run the batch lock:
+2. Run batch lock:
 ```bash
 dotward batch-lock targets.txt
+
+```
+
+3. Run batch unlock:
+```bash
+dotward batch-unlock targets.txt
 
 ```
 

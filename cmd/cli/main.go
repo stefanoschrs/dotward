@@ -46,6 +46,8 @@ func main() {
 		err = lock(path)
 	case "batch-lock":
 		err = batchLock(path)
+	case "batch-unlock":
+		err = batchUnlock(path)
 	default:
 		usage()
 		os.Exit(2)
@@ -60,6 +62,7 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: dotward <unlock|update|lock> <file>")
 	fmt.Fprintln(os.Stderr, "       dotward batch-lock <paths-file>")
+	fmt.Fprintln(os.Stderr, "       dotward batch-unlock <paths-file>")
 	fmt.Fprintln(os.Stderr, "       dotward version")
 }
 
@@ -204,6 +207,68 @@ func batchLock(pathsFile string) error {
 
 	if failed > 0 {
 		return fmt.Errorf("batch-lock completed with %d failure(s)", failed)
+	}
+	return nil
+}
+
+func batchUnlock(pathsFile string) error {
+	cfg, err := core.ResolveConfig()
+	if err != nil {
+		return fmt.Errorf("failed to resolve config: %w", err)
+	}
+	if err := ensureDaemonRunning(cfg.SockPath); err != nil {
+		return errors.New("please start Dotward.app")
+	}
+
+	paths, err := readPathsFile(pathsFile)
+	if err != nil {
+		return err
+	}
+	if len(paths) == 0 {
+		return fmt.Errorf("no file paths found in %q", pathsFile)
+	}
+
+	pw, err := readPassword("Password: ")
+	if err != nil {
+		return err
+	}
+	defer zeroBytes(pw)
+
+	var failed int
+	for _, path := range paths {
+		pwCopy := append([]byte(nil), pw...)
+		unlockErr := unlockOneFile(path, pwCopy, cfg.SockPath, cfg.DefaultTTL)
+		zeroBytes(pwCopy)
+		if unlockErr != nil {
+			failed++
+			fmt.Fprintf(os.Stderr, "FAILED %s: %v\n", path, unlockErr)
+			continue
+		}
+		fmt.Printf("Unlocked %s for %s\n", path, cfg.DefaultTTL)
+	}
+
+	if failed > 0 {
+		return fmt.Errorf("batch-unlock completed with %d failure(s)", failed)
+	}
+	return nil
+}
+
+func unlockOneFile(absPath string, pw []byte, sockPath string, ttl time.Duration) error {
+	encPath := absPath + ".enc"
+	if err := cryptopkg.DecryptFile(encPath, absPath, pw); err != nil {
+		return fmt.Errorf("failed to decrypt %q: %w", encPath, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	resp, err := ipc.Call(ctx, sockPath, "Manager.Register", ipc.Request{Path: absPath, TTL: ttl})
+	if err != nil {
+		_ = core.SecureDelete(absPath)
+		return errors.New("please start Dotward.app")
+	}
+	if !resp.Success {
+		_ = core.SecureDelete(absPath)
+		return fmt.Errorf("daemon rejected register: %s", resp.Error)
 	}
 	return nil
 }
