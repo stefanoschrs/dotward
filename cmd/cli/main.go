@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net"
@@ -75,11 +77,10 @@ func unlock(file string) error {
 		return errors.New("please start Dotward.app")
 	}
 
-	absPath, err := filepath.Abs(file)
+	absPath, encPath, err := resolveUnlockPaths(file)
 	if err != nil {
-		return fmt.Errorf("failed to resolve file path %q: %w", file, err)
+		return err
 	}
-	encPath := absPath + ".enc"
 
 	pw, err := readPassword("Password: ")
 	if err != nil {
@@ -150,7 +151,7 @@ func lock(file string) error {
 		return fmt.Errorf("failed to stat plaintext file %q: %w", absPath, err)
 	}
 
-	pw, err := readPassword("Password: ")
+	pw, err := readPasswordWithConfirmation("Password: ", "Confirm password: ")
 	if err != nil {
 		return err
 	}
@@ -183,7 +184,7 @@ func batchLock(pathsFile string) error {
 		return fmt.Errorf("no file paths found in %q", pathsFile)
 	}
 
-	pw, err := readPassword("Password: ")
+	pw, err := readPasswordWithConfirmation("Password: ", "Confirm password: ")
 	if err != nil {
 		return err
 	}
@@ -253,8 +254,11 @@ func batchUnlock(pathsFile string) error {
 	return nil
 }
 
-func unlockOneFile(absPath string, pw []byte, sockPath string, ttl time.Duration) error {
-	encPath := absPath + ".enc"
+func unlockOneFile(path string, pw []byte, sockPath string, ttl time.Duration) error {
+	absPath, encPath, err := resolveUnlockPaths(path)
+	if err != nil {
+		return err
+	}
 	if err := cryptopkg.DecryptFile(encPath, absPath, pw); err != nil {
 		return fmt.Errorf("failed to decrypt %q: %w", encPath, err)
 	}
@@ -310,7 +314,7 @@ func readPassword(prompt string) ([]byte, error) {
 	pw, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println()
 	if err == nil {
-		if len(strings.TrimSpace(string(pw))) == 0 {
+		if len(bytes.TrimSpace(pw)) == 0 {
 			return nil, errors.New("password cannot be empty")
 		}
 		return pw, nil
@@ -326,6 +330,42 @@ func readPassword(prompt string) ([]byte, error) {
 		return nil, errors.New("password cannot be empty")
 	}
 	return []byte(line), nil
+}
+
+func readPasswordWithConfirmation(prompt, confirmPrompt string) ([]byte, error) {
+	pw, err := readPassword(prompt)
+	if err != nil {
+		return nil, err
+	}
+
+	confirm, err := readPassword(confirmPrompt)
+	if err != nil {
+		zeroBytes(pw)
+		return nil, err
+	}
+	defer zeroBytes(confirm)
+
+	if len(pw) != len(confirm) || subtle.ConstantTimeCompare(pw, confirm) != 1 {
+		zeroBytes(pw)
+		return nil, errors.New("passwords do not match")
+	}
+	return pw, nil
+}
+
+func resolveUnlockPaths(path string) (string, string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to resolve file path %q: %w", path, err)
+	}
+
+	if strings.HasSuffix(absPath, ".enc") {
+		plainPath := strings.TrimSuffix(absPath, ".enc")
+		if plainPath == "" {
+			return "", "", fmt.Errorf("invalid encrypted file path %q", absPath)
+		}
+		return plainPath, absPath, nil
+	}
+	return absPath, absPath + ".enc", nil
 }
 
 func zeroBytes(b []byte) {
