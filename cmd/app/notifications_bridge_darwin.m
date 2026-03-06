@@ -5,6 +5,8 @@
 #import <string.h>
 
 extern void HandleExtendAction(char *path);
+extern void HandleUpdateAction(char *versionTag, char *publishedAt, char *appDownloadURL, char *cliDownloadURL);
+extern void HandleSkipVersionAction(char *versionTag);
 
 @interface DotwardDelegate : NSObject <UNUserNotificationCenterDelegate>
 @end
@@ -23,6 +25,22 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
                 const char *utf8 = [path UTF8String];
                 char *copy = strdup(utf8);
                 HandleExtendAction(copy);
+            }
+        } else if ([actionId isEqualToString:@"UPDATE_ACTION"]) {
+            NSString *versionTag = response.notification.request.content.userInfo[@"version_tag"];
+            NSString *publishedAt = response.notification.request.content.userInfo[@"published_at"];
+            NSString *appDownloadURL = response.notification.request.content.userInfo[@"app_download_url"];
+            NSString *cliDownloadURL = response.notification.request.content.userInfo[@"cli_download_url"];
+            if (versionTag != nil && publishedAt != nil && appDownloadURL != nil && cliDownloadURL != nil) {
+                HandleUpdateAction(strdup([versionTag UTF8String]),
+                                   strdup([publishedAt UTF8String]),
+                                   strdup([appDownloadURL UTF8String]),
+                                   strdup([cliDownloadURL UTF8String]));
+            }
+        } else if ([actionId isEqualToString:@"SKIP_VERSION_ACTION"]) {
+            NSString *versionTag = response.notification.request.content.userInfo[@"version_tag"];
+            if (versionTag != nil) {
+                HandleSkipVersionAction(strdup([versionTag UTF8String]));
             }
         }
         completionHandler();
@@ -52,7 +70,21 @@ void DotwardInitNotifications(void) {
                                                                                   actions:@[extendAction]
                                                                         intentIdentifiers:@[]
                                                                                   options:UNNotificationCategoryOptionCustomDismissAction];
-        [center setNotificationCategories:[NSSet setWithObject:category]];
+        UNNotificationAction *updateAction = [UNNotificationAction actionWithIdentifier:@"UPDATE_ACTION"
+                                                                                   title:@"Update"
+                                                                                 options:UNNotificationActionOptionForeground];
+        UNNotificationAction *skipVersionAction = [UNNotificationAction actionWithIdentifier:@"SKIP_VERSION_ACTION"
+                                                                                        title:@"Skip this version"
+                                                                                      options:UNNotificationActionOptionNone];
+        UNNotificationAction *dismissAction = [UNNotificationAction actionWithIdentifier:@"DISMISS_UPDATE_ACTION"
+                                                                                    title:@"Dismiss"
+                                                                                  options:UNNotificationActionOptionNone];
+
+        UNNotificationCategory *updateCategory = [UNNotificationCategory categoryWithIdentifier:@"UPDATE_AVAILABLE"
+                                                                                         actions:@[updateAction, skipVersionAction, dismissAction]
+                                                                               intentIdentifiers:@[]
+                                                                                         options:UNNotificationCategoryOptionCustomDismissAction];
+        [center setNotificationCategories:[NSSet setWithObjects:category, updateCategory, nil]];
 
         dotwardDelegate = [DotwardDelegate new];
         [center setDelegate:dotwardDelegate];
@@ -151,6 +183,30 @@ int DotwardSendDeletedNotification(const char *path, const char *title, const ch
 
         NSString *pathStr = [NSString stringWithUTF8String:path];
         NSString *identifier = DotwardIdentifier(@"deleted", pathStr);
+        return DotwardSendNotification(identifier, content);
+    }
+}
+
+int DotwardSendUpdateNotification(const char *version, const char *publishedAt, const char *appDownloadURL, const char *cliDownloadURL, const char *title, const char *body) {
+    @autoreleasepool {
+        if (version == NULL || publishedAt == NULL || appDownloadURL == NULL || cliDownloadURL == NULL || title == NULL || body == NULL) {
+            return 0;
+        }
+        UNMutableNotificationContent *content = [UNMutableNotificationContent new];
+        content.title = [NSString stringWithUTF8String:title];
+        content.body = [NSString stringWithUTF8String:body];
+        content.sound = [UNNotificationSound defaultSound];
+        content.categoryIdentifier = @"UPDATE_AVAILABLE";
+
+        NSString *versionStr = [NSString stringWithUTF8String:version];
+        content.userInfo = @{
+            @"version_tag": versionStr,
+            @"published_at": [NSString stringWithUTF8String:publishedAt],
+            @"app_download_url": [NSString stringWithUTF8String:appDownloadURL],
+            @"cli_download_url": [NSString stringWithUTF8String:cliDownloadURL]
+        };
+
+        NSString *identifier = DotwardIdentifier(@"update-available", versionStr);
         return DotwardSendNotification(identifier, content);
     }
 }

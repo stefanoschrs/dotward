@@ -10,7 +10,7 @@ func newNotifier() Notifier {
 	return &noopNotifier{}
 }
 
-func (n *noopNotifier) Init(_ chan<- string) error {
+func (n *noopNotifier) Init(_ chan<- string, _ chan<- updateNotification, _ chan<- string) error {
 	return nil
 }
 
@@ -23,6 +23,10 @@ func (n *noopNotifier) FileUnlocked(_ string, _ time.Duration) error {
 }
 
 func (n *noopNotifier) FileDeleted(_ string) error {
+	return nil
+}
+
+func (n *noopNotifier) UpdateAvailable(_ updateNotification) error {
 	return nil
 }
 

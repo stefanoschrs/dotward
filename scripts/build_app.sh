@@ -11,12 +11,13 @@ RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 VERSION="${VERSION:-dev}"
 COMMIT="${COMMIT:-unknown}"
 BUILD_DATE="${BUILD_DATE:-unknown}"
+BUILD_TIME="${BUILD_TIME:-${BUILD_DATE}}"
 BUILT_BY="${BUILT_BY:-build_app.sh}"
 PLIST_VERSION="${VERSION#v}"
 if [[ ! "${PLIST_VERSION}" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
   PLIST_VERSION="0.0.0"
 fi
-LDFLAGS="-X github.com/stefanos/dotward/internal/version.Version=${VERSION} -X github.com/stefanos/dotward/internal/version.Commit=${COMMIT} -X github.com/stefanos/dotward/internal/version.BuildDate=${BUILD_DATE} -X github.com/stefanos/dotward/internal/version.BuiltBy=${BUILT_BY}"
+LDFLAGS="-X github.com/stefanos/dotward/internal/version.Version=${VERSION} -X github.com/stefanos/dotward/internal/version.Commit=${COMMIT} -X github.com/stefanos/dotward/internal/version.BuildTime=${BUILD_TIME} -X github.com/stefanos/dotward/internal/version.BuildDate=${BUILD_DATE} -X github.com/stefanos/dotward/internal/version.BuiltBy=${BUILT_BY}"
 ICONSET_DIR="${ROOT_DIR}/AppIcons/Assets.xcassets/AppIcon.appiconset"
 ICON_FILE="${RESOURCES_DIR}/AppIcon.icns"
 

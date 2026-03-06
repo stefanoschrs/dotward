@@ -9,9 +9,11 @@ APP_INSTALL_PATH := $(APP_INSTALL_DIR)/Dotward.app
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+BUILD_TIME ?= $(BUILD_DATE)
 BUILT_BY ?= make
 LDFLAGS := -X github.com/stefanos/dotward/internal/version.Version=$(VERSION) \
 	-X github.com/stefanos/dotward/internal/version.Commit=$(COMMIT) \
+	-X github.com/stefanos/dotward/internal/version.BuildTime=$(BUILD_TIME) \
 	-X github.com/stefanos/dotward/internal/version.BuildDate=$(BUILD_DATE) \
 	-X github.com/stefanos/dotward/internal/version.BuiltBy=$(BUILT_BY)
 GOBIN ?= $(shell go env GOBIN)
@@ -28,7 +30,7 @@ build-cli:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o "$(CLI_BIN)" ./cmd/cli
 
 build-app:
-	VERSION="$(VERSION)" COMMIT="$(COMMIT)" BUILD_DATE="$(BUILD_DATE)" BUILT_BY="$(BUILT_BY)" ./scripts/build_app.sh
+	VERSION="$(VERSION)" COMMIT="$(COMMIT)" BUILD_DATE="$(BUILD_DATE)" BUILD_TIME="$(BUILD_TIME)" BUILT_BY="$(BUILT_BY)" ./scripts/build_app.sh
 
 test:
 	go test ./...
