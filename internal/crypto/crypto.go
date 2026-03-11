@@ -82,25 +82,26 @@ func EncryptFile(src, dst string, password []byte) error {
 	return nil
 }
 
-// DecryptFile decrypts src into dst using an Argon2id-derived AES-256-GCM key.
-func DecryptFile(src, dst string, password []byte) error {
+// Decrypt decrypts src and returns the plaintext bytes without writing to disk.
+// The caller is responsible for zeroing the returned slice when done.
+func Decrypt(src string, password []byte) ([]byte, error) {
 	payload, err := os.ReadFile(src)
 	if err != nil {
-		return fmt.Errorf("failed to read encrypted file %q: %w", src, err)
+		return nil, fmt.Errorf("failed to read encrypted file %q: %w", src, err)
 	}
 
 	if len(payload) < saltSize+12+16 {
-		return errors.New("encrypted payload is too short")
+		return nil, errors.New("encrypted payload is too short")
 	}
 
 	var salt, nonce, ciphertext []byte
 	if len(payload) >= len(magicHeader)+1 && string(payload[:len(magicHeader)]) == magicHeader {
 		if payload[len(magicHeader)] != versionByte {
-			return fmt.Errorf("unsupported encrypted file version: %d", payload[len(magicHeader)])
+			return nil, fmt.Errorf("unsupported encrypted file version: %d", payload[len(magicHeader)])
 		}
 		offset := len(magicHeader) + 1
 		if len(payload) < offset+saltSize+12+16 {
-			return errors.New("encrypted payload is too short")
+			return nil, errors.New("encrypted payload is too short")
 		}
 		salt = payload[offset : offset+saltSize]
 		offset += saltSize
@@ -121,18 +122,27 @@ func DecryptFile(src, dst string, password []byte) error {
 			lastErr = err
 			continue
 		}
-		defer zeroBytes(plaintext)
-
-		if err := os.WriteFile(dst, plaintext, 0o600); err != nil {
-			return fmt.Errorf("failed to write plaintext file %q: %w", dst, err)
-		}
-		return nil
+		return plaintext, nil
 	}
 
 	if lastErr != nil {
-		return fmt.Errorf("failed to decrypt payload: %w", lastErr)
+		return nil, fmt.Errorf("failed to decrypt payload: %w", lastErr)
 	}
-	return errors.New("failed to decrypt payload")
+	return nil, errors.New("failed to decrypt payload")
+}
+
+// DecryptFile decrypts src into dst using an Argon2id-derived AES-256-GCM key.
+func DecryptFile(src, dst string, password []byte) error {
+	plaintext, err := Decrypt(src, password)
+	if err != nil {
+		return err
+	}
+	defer zeroBytes(plaintext)
+
+	if err := os.WriteFile(dst, plaintext, 0o600); err != nil {
+		return fmt.Errorf("failed to write plaintext file %q: %w", dst, err)
+	}
+	return nil
 }
 
 func decryptPayload(password []byte, params argon2Params, salt, nonce, ciphertext []byte) ([]byte, error) {

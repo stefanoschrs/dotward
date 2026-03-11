@@ -41,7 +41,17 @@ func main() {
 	var err error
 	switch cmd {
 	case "unlock":
-		err = unlock(path)
+		permanent := false
+		switch {
+		case len(os.Args) == 4 && os.Args[3] == "--permanent":
+			permanent = true
+		case len(os.Args) == 4 && os.Args[2] == "--permanent":
+			permanent = true
+			path = os.Args[3]
+		}
+		err = unlock(path, permanent)
+	case "cat":
+		err = cat(path)
 	case "update":
 		err = update(path)
 	case "lock":
@@ -62,21 +72,36 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: dotward <unlock|update|lock> <file>")
+	fmt.Fprintln(os.Stderr, "usage: dotward <unlock|update|lock|cat> <file>")
+	fmt.Fprintln(os.Stderr, "       dotward unlock [--permanent] <file>")
 	fmt.Fprintln(os.Stderr, "       dotward batch-lock <paths-file>")
 	fmt.Fprintln(os.Stderr, "       dotward batch-unlock <paths-file>")
 	fmt.Fprintln(os.Stderr, "       dotward version")
 }
 
-func unlock(file string) error {
-	cfg, err := core.ResolveConfig()
+func cat(file string) error {
+	_, encPath, err := resolveUnlockPaths(file)
 	if err != nil {
-		return fmt.Errorf("failed to resolve config: %w", err)
-	}
-	if err := ensureDaemonRunning(cfg.SockPath); err != nil {
-		return errors.New("please start Dotward.app")
+		return err
 	}
 
+	pw, err := readPassword("Password: ")
+	if err != nil {
+		return err
+	}
+	defer zeroBytes(pw)
+
+	plaintext, err := cryptopkg.Decrypt(encPath, pw)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt %q: %w", encPath, err)
+	}
+	defer zeroBytes(plaintext)
+
+	_, err = os.Stdout.Write(plaintext)
+	return err
+}
+
+func unlock(file string, permanent bool) error {
 	absPath, encPath, err := resolveUnlockPaths(file)
 	if err != nil {
 		return err
@@ -90,6 +115,21 @@ func unlock(file string) error {
 
 	if err := cryptopkg.DecryptFile(encPath, absPath, pw); err != nil {
 		return fmt.Errorf("failed to decrypt %q: %w", encPath, err)
+	}
+
+	if permanent {
+		fmt.Printf("Permanently unlocked %s\n", absPath)
+		return nil
+	}
+
+	cfg, err := core.ResolveConfig()
+	if err != nil {
+		_ = core.SecureDelete(absPath)
+		return fmt.Errorf("failed to resolve config: %w", err)
+	}
+	if err := ensureDaemonRunning(cfg.SockPath); err != nil {
+		_ = core.SecureDelete(absPath)
+		return errors.New("please start Dotward.app")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
