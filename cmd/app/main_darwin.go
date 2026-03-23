@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -46,7 +47,33 @@ type app struct {
 
 const maxFileMenuItems = 128
 
+const maxLogSize = 2 * 1024 * 1024 // 2 MiB
+
+func initLogFile() *os.File {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return nil
+	}
+	logPath := filepath.Join(configDir, "Dotward", "dotward-app.log")
+
+	if info, err := os.Stat(logPath); err == nil && info.Size() > maxLogSize {
+		_ = os.Rename(logPath, logPath+".old")
+	}
+
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	return f
+}
+
 func main() {
+	logFile := initLogFile()
+	if logFile != nil {
+		defer logFile.Close()
+	}
+
 	log.Printf("starting dotward-app %s", version.String())
 
 	cfg, err := core.ResolveConfig()
