@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
 	"github.com/stefanos/dotward/internal/core"
@@ -21,62 +22,86 @@ import (
 	"github.com/stefanos/dotward/internal/version"
 )
 
-func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(2)
-	}
+var permanentFlag bool
 
-	cmd := os.Args[1]
-	if cmd == "version" || cmd == "--version" || cmd == "-v" {
-		fmt.Println(version.Detailed("dotward-cli"))
-		return
-	}
-	if len(os.Args) < 3 {
-		usage()
-		os.Exit(2)
-	}
-	path := os.Args[2]
-
-	var err error
-	switch cmd {
-	case "unlock":
-		permanent := false
-		switch {
-		case len(os.Args) == 4 && os.Args[3] == "--permanent":
-			permanent = true
-		case len(os.Args) == 4 && os.Args[2] == "--permanent":
-			permanent = true
-			path = os.Args[3]
-		}
-		err = unlock(path, permanent)
-	case "cat":
-		err = cat(path)
-	case "update":
-		err = update(path)
-	case "lock":
-		err = lock(path)
-	case "batch-lock":
-		err = batchLock(path)
-	case "batch-unlock":
-		err = batchUnlock(path)
-	default:
-		usage()
-		os.Exit(2)
-	}
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
+var rootCmd = &cobra.Command{
+	Use:   "dotward",
+	Short: "JIT access to local secret files",
+	Version: version.Detailed("dotward-cli"),
 }
 
-func usage() {
-	fmt.Fprintln(os.Stderr, "usage: dotward <unlock|update|lock|cat> <file>")
-	fmt.Fprintln(os.Stderr, "       dotward unlock [--permanent] <file>")
-	fmt.Fprintln(os.Stderr, "       dotward batch-lock <paths-file>")
-	fmt.Fprintln(os.Stderr, "       dotward batch-unlock <paths-file>")
-	fmt.Fprintln(os.Stderr, "       dotward version")
+var unlockCmd = &cobra.Command{
+	Use:   "unlock <file> [files...]",
+	Short: "Decrypt one or more files and register them with the daemon",
+	Args:  cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return unlock(args, permanentFlag)
+	},
+}
+
+var catCmd = &cobra.Command{
+	Use:   "cat <file>",
+	Short: "Decrypt and print a file to stdout",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cat(args[0])
+	},
+}
+
+var updateCmd = &cobra.Command{
+	Use:   "update <file>",
+	Short: "Re-encrypt a plaintext file",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return update(args[0])
+	},
+}
+
+var lockCmd = &cobra.Command{
+	Use:   "lock <file> [files...]",
+	Short: "Encrypt one or more files and securely delete the plaintext",
+	Args:  cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return lock(args)
+	},
+}
+
+var batchLockCmd = &cobra.Command{
+	Use:   "batch-lock <paths-file>",
+	Short: "Lock multiple files listed in a paths file",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return batchLock(args[0])
+	},
+}
+
+var batchUnlockCmd = &cobra.Command{
+	Use:   "batch-unlock <paths-file>",
+	Short: "Unlock multiple files listed in a paths file",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return batchUnlock(args[0])
+	},
+}
+
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print version information",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println(version.Detailed("dotward-cli"))
+	},
+}
+
+func init() {
+	unlockCmd.Flags().BoolVar(&permanentFlag, "permanent", false, "keep file unlocked until manually locked")
+	rootCmd.AddCommand(unlockCmd, catCmd, updateCmd, lockCmd, batchLockCmd, batchUnlockCmd, versionCmd)
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
 }
 
 func cat(file string) error {
@@ -101,10 +126,17 @@ func cat(file string) error {
 	return err
 }
 
-func unlock(file string, permanent bool) error {
-	absPath, encPath, err := resolveUnlockPaths(file)
-	if err != nil {
-		return err
+func unlock(files []string, permanent bool) error {
+	var cfg core.Config
+	if !permanent {
+		var err error
+		cfg, err = core.ResolveConfig()
+		if err != nil {
+			return fmt.Errorf("failed to resolve config: %w", err)
+		}
+		if err := ensureDaemonRunning(cfg.SockPath); err != nil {
+			return errors.New("please start Dotward.app")
+		}
 	}
 
 	pw, err := readPassword("Password: ")
@@ -113,23 +145,41 @@ func unlock(file string, permanent bool) error {
 	}
 	defer zeroBytes(pw)
 
+	var failed int
+	for _, file := range files {
+		pwCopy := append([]byte(nil), pw...)
+		if unlockErr := unlockOnePath(file, pwCopy, permanent, cfg); unlockErr != nil {
+			failed++
+			fmt.Fprintf(os.Stderr, "FAILED %s: %v\n", file, unlockErr)
+			continue
+		}
+		if permanent {
+			fmt.Printf("Permanently unlocked %s\n", file)
+		} else {
+			fmt.Printf("Unlocked %s for %s\n", file, cfg.DefaultTTL)
+		}
+	}
+
+	if failed > 0 {
+		return fmt.Errorf("unlock completed with %d failure(s)", failed)
+	}
+	return nil
+}
+
+func unlockOnePath(file string, pw []byte, permanent bool, cfg core.Config) error {
+	defer zeroBytes(pw)
+
+	absPath, encPath, err := resolveUnlockPaths(file)
+	if err != nil {
+		return err
+	}
+
 	if err := cryptopkg.DecryptFile(encPath, absPath, pw); err != nil {
 		return fmt.Errorf("failed to decrypt %q: %w", encPath, err)
 	}
 
 	if permanent {
-		fmt.Printf("Permanently unlocked %s\n", absPath)
 		return nil
-	}
-
-	cfg, err := core.ResolveConfig()
-	if err != nil {
-		_ = core.SecureDelete(absPath)
-		return fmt.Errorf("failed to resolve config: %w", err)
-	}
-	if err := ensureDaemonRunning(cfg.SockPath); err != nil {
-		_ = core.SecureDelete(absPath)
-		return errors.New("please start Dotward.app")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -143,8 +193,6 @@ func unlock(file string, permanent bool) error {
 		_ = core.SecureDelete(absPath)
 		return fmt.Errorf("daemon rejected register: %s", resp.Error)
 	}
-
-	fmt.Printf("Unlocked %s for %s\n", absPath, cfg.DefaultTTL)
 	return nil
 }
 
@@ -174,21 +222,10 @@ func update(file string) error {
 	return nil
 }
 
-func lock(file string) error {
+func lock(files []string) error {
 	cfg, err := core.ResolveConfig()
 	if err != nil {
 		return fmt.Errorf("failed to resolve config: %w", err)
-	}
-
-	absPath, err := filepath.Abs(file)
-	if err != nil {
-		return fmt.Errorf("failed to resolve file path %q: %w", file, err)
-	}
-	if _, err := os.Stat(absPath); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("plaintext file %q does not exist", absPath)
-		}
-		return fmt.Errorf("failed to stat plaintext file %q: %w", absPath, err)
 	}
 
 	pw, err := readPasswordWithConfirmation("Password: ", "Confirm password: ")
@@ -197,16 +234,32 @@ func lock(file string) error {
 	}
 	defer zeroBytes(pw)
 
-	encPath, err := lockOneFile(absPath, pw)
-	if err != nil {
-		return err
+	var failed int
+	for _, file := range files {
+		absPath, err := filepath.Abs(file)
+		if err != nil {
+			failed++
+			fmt.Fprintf(os.Stderr, "FAILED %s: %v\n", file, err)
+			continue
+		}
+
+		pwCopy := append([]byte(nil), pw...)
+		encPath, lockErr := lockOneFile(absPath, pwCopy)
+		if lockErr != nil {
+			failed++
+			fmt.Fprintf(os.Stderr, "FAILED %s: %v\n", file, lockErr)
+			continue
+		}
+
+		if err := stopWatching(cfg.SockPath, absPath); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: locked file locally but failed to stop watching %s (%v)\n", absPath, err)
+		}
+		fmt.Printf("Locked %s and updated %s\n", absPath, encPath)
 	}
 
-	if err := stopWatching(cfg.SockPath, absPath); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: locked file locally but failed to stop watching %s (%v)\n", absPath, err)
+	if failed > 0 {
+		return fmt.Errorf("lock completed with %d failure(s)", failed)
 	}
-
-	fmt.Printf("Locked %s and updated %s\n", absPath, encPath)
 	return nil
 }
 
