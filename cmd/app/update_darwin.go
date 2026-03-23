@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -54,9 +55,28 @@ func (a *app) applyUpdate(ctx context.Context, update updateNotification) error 
 		return err
 	}
 
-	cmd := exec.Command("open", targetAppPath)
+	if err := scheduleRelaunch(targetAppPath); err != nil {
+		return fmt.Errorf("failed to schedule relaunch of updated app: %w", err)
+	}
+	return nil
+}
+
+// scheduleRelaunch spawns a detached shell process that waits for the current
+// process to exit, then opens the app bundle. This avoids the macOS `open`
+// behavior of just activating an already-running instance.
+func scheduleRelaunch(appPath string) error {
+	pid := os.Getpid()
+	script := fmt.Sprintf(
+		`while kill -0 %d 2>/dev/null; do sleep 0.2; done; sleep 0.5; open %q`,
+		pid, appPath,
+	)
+	cmd := exec.Command("/bin/sh", "-c", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.Stdin = nil
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to relaunch updated app: %w", err)
+		return fmt.Errorf("failed to start relaunch helper: %w", err)
 	}
 	return nil
 }
