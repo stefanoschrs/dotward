@@ -49,11 +49,11 @@ var catCmd = &cobra.Command{
 }
 
 var updateCmd = &cobra.Command{
-	Use:   "update <file>",
-	Short: "Re-encrypt a plaintext file",
-	Args:  cobra.ExactArgs(1),
+	Use:   "update <file> [files...]",
+	Short: "Re-encrypt one or more plaintext files",
+	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return update(args[0])
+		return update(args)
 	},
 }
 
@@ -196,30 +196,50 @@ func unlockOnePath(file string, pw []byte, permanent bool, cfg core.Config) erro
 	return nil
 }
 
-func update(file string) error {
-	absPath, err := filepath.Abs(file)
-	if err != nil {
-		return fmt.Errorf("failed to resolve file path %q: %w", file, err)
-	}
-	if _, err := os.Stat(absPath); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("plaintext file %q does not exist", absPath)
-		}
-		return fmt.Errorf("failed to stat plaintext file %q: %w", absPath, err)
-	}
-
+func update(files []string) error {
 	pw, err := readPassword("Password: ")
 	if err != nil {
 		return err
 	}
 	defer zeroBytes(pw)
 
+	var failed int
+	for _, file := range files {
+		pwCopy := append([]byte(nil), pw...)
+		encPath, updateErr := updateOneFile(file, pwCopy)
+		if updateErr != nil {
+			failed++
+			fmt.Fprintf(os.Stderr, "FAILED %s: %v\n", file, updateErr)
+			continue
+		}
+		fmt.Printf("Updated encrypted file %s\n", encPath)
+	}
+
+	if failed > 0 {
+		return fmt.Errorf("update completed with %d failure(s)", failed)
+	}
+	return nil
+}
+
+func updateOneFile(file string, pw []byte) (string, error) {
+	defer zeroBytes(pw)
+
+	absPath, err := filepath.Abs(file)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve file path %q: %w", file, err)
+	}
+	if _, err := os.Stat(absPath); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("plaintext file %q does not exist", absPath)
+		}
+		return "", fmt.Errorf("failed to stat plaintext file %q: %w", absPath, err)
+	}
+
 	encPath := absPath + ".enc"
 	if err := cryptopkg.EncryptFile(absPath, encPath, pw); err != nil {
-		return fmt.Errorf("failed to encrypt %q: %w", absPath, err)
+		return "", fmt.Errorf("failed to encrypt %q: %w", absPath, err)
 	}
-	fmt.Printf("Updated encrypted file %s\n", encPath)
-	return nil
+	return encPath, nil
 }
 
 func lock(files []string) error {
