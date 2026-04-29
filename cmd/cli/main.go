@@ -25,8 +25,8 @@ import (
 var permanentFlag bool
 
 var rootCmd = &cobra.Command{
-	Use:   "dotward",
-	Short: "JIT access to local secret files",
+	Use:     "dotward",
+	Short:   "JIT access to local secret files",
 	Version: version.Detailed("dotward-cli"),
 }
 
@@ -236,10 +236,29 @@ func updateOneFile(file string, pw []byte) (string, error) {
 	}
 
 	encPath := absPath + ".enc"
+	if err := validateExistingEncryptedFilePassword(encPath, pw); err != nil {
+		return "", err
+	}
 	if err := cryptopkg.EncryptFile(absPath, encPath, pw); err != nil {
 		return "", fmt.Errorf("failed to encrypt %q: %w", absPath, err)
 	}
 	return encPath, nil
+}
+
+func validateExistingEncryptedFilePassword(encPath string, pw []byte) error {
+	if _, err := os.Stat(encPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to stat encrypted file %q: %w", encPath, err)
+	}
+
+	plaintext, err := cryptopkg.Decrypt(encPath, pw)
+	if err != nil {
+		return fmt.Errorf("failed to verify password for existing encrypted file %q: wrong password or corrupted file: %w", encPath, err)
+	}
+	defer zeroBytes(plaintext)
+	return nil
 }
 
 func lock(files []string) error {
