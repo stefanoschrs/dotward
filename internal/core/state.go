@@ -110,6 +110,14 @@ func (s *State) StopWatching(path string) {
 	s.mu.Unlock()
 }
 
+// IsWatching reports whether path is currently registered as a watched plaintext file.
+func (s *State) IsWatching(path string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.files[path]
+	return ok
+}
+
 // Extend extends the TTL for a watched file.
 func (s *State) Extend(path string, delta time.Duration) bool {
 	s.mu.Lock()

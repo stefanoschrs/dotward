@@ -48,6 +48,18 @@ func (m *Manager) Register(req ipc.Request, resp *ipc.Response) error {
 	return nil
 }
 
+// IsWatching reports whether the daemon is currently watching the plaintext path.
+// Response.Success is true when the path is registered; false when it is not.
+func (m *Manager) IsWatching(req ipc.Request, resp *ipc.Response) error {
+	if req.Path == "" {
+		resp.Success = false
+		resp.Error = "path is required"
+		return nil
+	}
+	resp.Success = m.state.IsWatching(req.Path)
+	return nil
+}
+
 // Extend extends a watched file by TTL (or default TTL if omitted).
 func (m *Manager) Extend(req ipc.Request, resp *ipc.Response) error {
 	if req.Path == "" {
