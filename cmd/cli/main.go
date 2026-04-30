@@ -24,6 +24,18 @@ import (
 
 var permanentFlag bool
 
+// resolveUpdateConfig is the config resolver used by update; tests may replace it.
+var resolveUpdateConfig = core.ResolveConfig
+
+// ipcIsWatching probes the daemon before allowing first-time encrypt (--create). Tests may replace it.
+var ipcIsWatching = func(ctx context.Context, sockPath, plainPath string) (bool, error) {
+	resp, err := ipc.Call(ctx, sockPath, "Manager.IsWatching", ipc.Request{Path: plainPath})
+	if err != nil {
+		return false, err
+	}
+	return resp.Success, nil
+}
+
 var rootCmd = &cobra.Command{
 	Use:     "dotward",
 	Short:   "JIT access to local secret files",
@@ -53,7 +65,11 @@ var updateCmd = &cobra.Command{
 	Short: "Re-encrypt one or more plaintext files",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return update(args)
+		allowCreate, err := cmd.Flags().GetBool("create")
+		if err != nil {
+			return err
+		}
+		return update(args, allowCreate)
 	},
 }
 
@@ -95,6 +111,7 @@ var versionCmd = &cobra.Command{
 
 func init() {
 	unlockCmd.Flags().BoolVar(&permanentFlag, "permanent", false, "keep file unlocked until manually locked")
+	updateCmd.Flags().Bool("create", false, "create a new .enc sidecar when none exists (first-time encrypt only)")
 	rootCmd.AddCommand(unlockCmd, catCmd, updateCmd, lockCmd, batchLockCmd, batchUnlockCmd, versionCmd)
 }
 
@@ -196,7 +213,7 @@ func unlockOnePath(file string, pw []byte, permanent bool, cfg core.Config) erro
 	return nil
 }
 
-func update(files []string) error {
+func update(files []string, allowCreateMissingEnc bool) error {
 	pw, err := readPassword("Password: ")
 	if err != nil {
 		return err
@@ -206,7 +223,7 @@ func update(files []string) error {
 	var failed int
 	for _, file := range files {
 		pwCopy := append([]byte(nil), pw...)
-		encPath, updateErr := updateOneFile(file, pwCopy)
+		encPath, updateErr := updateOneFile(file, pwCopy, allowCreateMissingEnc)
 		if updateErr != nil {
 			failed++
 			fmt.Fprintf(os.Stderr, "FAILED %s: %v\n", file, updateErr)
@@ -221,12 +238,12 @@ func update(files []string) error {
 	return nil
 }
 
-func updateOneFile(file string, pw []byte) (string, error) {
+func updateOneFile(file string, pw []byte, allowCreateMissingEnc bool) (string, error) {
 	defer zeroBytes(pw)
 
-	absPath, err := filepath.Abs(file)
+	absPath, encPath, err := resolveUnlockPaths(file)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve file path %q: %w", file, err)
+		return "", err
 	}
 	if _, err := os.Stat(absPath); err != nil {
 		if os.IsNotExist(err) {
@@ -235,9 +252,24 @@ func updateOneFile(file string, pw []byte) (string, error) {
 		return "", fmt.Errorf("failed to stat plaintext file %q: %w", absPath, err)
 	}
 
-	encPath := absPath + ".enc"
-	if err := validateExistingEncryptedFilePassword(encPath, pw); err != nil {
-		return "", err
+	if _, err := os.Stat(encPath); err != nil {
+		if os.IsNotExist(err) {
+			if !allowCreateMissingEnc {
+				return "", fmt.Errorf("encrypted file %q does not exist; pass --create only for first-time encrypt from plaintext", encPath)
+			}
+			cfg, cfgErr := resolveUpdateConfig()
+			if cfgErr == nil {
+				if err := refuseUpdateWhenEncMissingIfWatched(cfg.SockPath, encPath, absPath); err != nil {
+					return "", err
+				}
+			}
+		} else {
+			return "", fmt.Errorf("failed to stat encrypted file %q: %w", encPath, err)
+		}
+	} else {
+		if err := validateExistingEncryptedFilePassword(encPath, pw); err != nil {
+			return "", err
+		}
 	}
 	if err := cryptopkg.EncryptFile(absPath, encPath, pw); err != nil {
 		return "", fmt.Errorf("failed to encrypt %q: %w", absPath, err)
@@ -245,14 +277,24 @@ func updateOneFile(file string, pw []byte) (string, error) {
 	return encPath, nil
 }
 
-func validateExistingEncryptedFilePassword(encPath string, pw []byte) error {
-	if _, err := os.Stat(encPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to stat encrypted file %q: %w", encPath, err)
+func refuseUpdateWhenEncMissingIfWatched(sockPath, encPath, absPlain string) error {
+	if sockPath == "" {
+		return nil
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	watching, err := ipcIsWatching(ctx, sockPath, absPlain)
+	if err != nil {
+		// Daemon not running or unreachable: allow first-time encrypt with --create.
+		return nil
+	}
+	if watching {
+		return fmt.Errorf("cannot update: encrypted file %q is missing but %q is still registered as unlocked by Dotward; restore the sidecar or lock the file before updating", encPath, absPlain)
+	}
+	return nil
+}
 
+func validateExistingEncryptedFilePassword(encPath string, pw []byte) error {
 	plaintext, err := cryptopkg.Decrypt(encPath, pw)
 	if err != nil {
 		return fmt.Errorf("failed to verify password for existing encrypted file %q: wrong password or corrupted file: %w", encPath, err)
