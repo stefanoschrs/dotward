@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -48,12 +47,12 @@ func (a *app) applyUpdate(ctx context.Context, update updateNotification) error 
 		return err
 	}
 
-	if err := replaceAppBundle(targetAppPath, newAppPath); err != nil {
+	if err := installCLIIfPresent(ctx, tmpRoot, update.CLIDownloadURL); err != nil {
 		return err
 	}
 
-	if err := installCLIIfPresent(ctx, tmpRoot, update.CLIDownloadURL); err != nil {
-		log.Printf("app update installed but cli update failed: %v", err)
+	if err := replaceAppBundle(targetAppPath, newAppPath); err != nil {
+		return err
 	}
 
 	if err := scheduleRelaunch(targetAppPath); err != nil {
@@ -104,16 +103,37 @@ func installCLIIfPresent(ctx context.Context, tmpRoot string, cliURL string) err
 	}
 
 	var failed []string
-	installed := 0
 	for _, cliPath := range cliPaths {
 		if err := replaceBinaryAtomically(cliPath, downloadPath); err != nil {
-			failed = append(failed, err.Error())
-			continue
+			if elevatedErr := replaceBinaryWithPrivileges(cliPath, downloadPath); elevatedErr != nil {
+				failed = append(failed, fmt.Sprintf("%s (direct: %v; elevated: %v)", cliPath, err, elevatedErr))
+				continue
+			}
 		}
-		installed++
 	}
-	if installed == 0 && len(failed) > 0 {
+	if len(failed) > 0 {
 		return fmt.Errorf("failed to install updated cli: %s", strings.Join(failed, "; "))
+	}
+	return nil
+}
+
+func replaceBinaryWithPrivileges(targetPath string, sourcePath string) error {
+	script := `
+on run argv
+	set targetPath to item 1 of argv
+	set sourcePath to item 2 of argv
+	set shellScript to "set -e; target=" & quoted form of targetPath & "; source=" & quoted form of sourcePath & "; parent=$(/usr/bin/dirname \"$target\"); stage=$(/usr/bin/mktemp \"$parent/.dotward.stage.XXXXXX\"); backup=\"$parent/.dotward.backup.$$\"; cleanup() { /bin/rm -f \"$stage\"; }; trap cleanup EXIT; /bin/cp \"$source\" \"$stage\"; /bin/chmod 755 \"$stage\"; /bin/mv \"$target\" \"$backup\"; if /bin/mv \"$stage\" \"$target\"; then /bin/rm -f \"$backup\"; trap - EXIT; else /bin/mv \"$backup\" \"$target\"; exit 1; fi"
+	do shell script shellScript with administrator privileges
+end run
+`
+	cmd := exec.Command("/usr/bin/osascript", "-e", script, targetPath, sourcePath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return fmt.Errorf("failed to install updated cli with administrator privileges: %w", err)
+		}
+		return fmt.Errorf("failed to install updated cli with administrator privileges: %w: %s", err, msg)
 	}
 	return nil
 }
@@ -144,6 +164,9 @@ func resolveInstalledCLIPaths() []string {
 	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
 		add(filepath.Join(dir, "dotward"))
 	}
+	for _, p := range resolveShellCLIPaths() {
+		add(p)
+	}
 
 	home := os.Getenv("HOME")
 	candidates := []string{
@@ -162,6 +185,36 @@ func resolveInstalledCLIPaths() []string {
 		}
 	}
 
+	return paths
+}
+
+func resolveShellCLIPaths() []string {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/zsh"
+	}
+	commands := []string{
+		"command -v dotward",
+		"type -P dotward",
+		"whence -p dotward",
+	}
+
+	paths := make([]string, 0, len(commands))
+	for _, command := range commands {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		out, err := exec.CommandContext(ctx, shell, "-lc", command).Output()
+		cancel()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if !filepath.IsAbs(line) {
+				continue
+			}
+			paths = append(paths, line)
+		}
+	}
 	return paths
 }
 
