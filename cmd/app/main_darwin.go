@@ -239,7 +239,7 @@ func (a *app) checkForUpdates() {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	release, ok, err := a.updateCheck.Check(ctx, buildTime)
+	release, ok, err := a.updateCheck.Check(ctx, version.Version, buildTime)
 	if err != nil {
 		log.Printf("failed to check for updates: %v", err)
 		return

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -52,7 +53,7 @@ func (a *app) applyUpdate(ctx context.Context, update updateNotification) error 
 	}
 
 	if err := installCLIIfPresent(ctx, tmpRoot, update.CLIDownloadURL); err != nil {
-		return err
+		log.Printf("app update installed but cli update failed: %v", err)
 	}
 
 	if err := scheduleRelaunch(targetAppPath); err != nil {
@@ -82,8 +83,8 @@ func scheduleRelaunch(appPath string) error {
 }
 
 func installCLIIfPresent(ctx context.Context, tmpRoot string, cliURL string) error {
-	cliPath, ok := resolveInstalledCLIPath()
-	if !ok {
+	cliPaths := resolveInstalledCLIPaths()
+	if len(cliPaths) == 0 {
 		return nil
 	}
 
@@ -102,27 +103,66 @@ func installCLIIfPresent(ctx context.Context, tmpRoot string, cliURL string) err
 		}
 	}
 
-	return replaceBinaryAtomically(cliPath, downloadPath)
+	var failed []string
+	installed := 0
+	for _, cliPath := range cliPaths {
+		if err := replaceBinaryAtomically(cliPath, downloadPath); err != nil {
+			failed = append(failed, err.Error())
+			continue
+		}
+		installed++
+	}
+	if installed == 0 && len(failed) > 0 {
+		return fmt.Errorf("failed to install updated cli: %s", strings.Join(failed, "; "))
+	}
+	return nil
 }
 
-func resolveInstalledCLIPath() (string, bool) {
-	if p, err := exec.LookPath("dotward"); err == nil {
-		return p, true
+func resolveInstalledCLIPaths() []string {
+	seen := make(map[string]struct{})
+	paths := make([]string, 0, 8)
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return
+		}
+		if _, ok := seen[abs]; ok {
+			return
+		}
+		if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
+			seen[abs] = struct{}{}
+			paths = append(paths, abs)
+		}
 	}
+
+	if p, err := exec.LookPath("dotward"); err == nil {
+		add(p)
+	}
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		add(filepath.Join(dir, "dotward"))
+	}
+
+	home := os.Getenv("HOME")
 	candidates := []string{
 		"/usr/local/bin/dotward",
 		"/opt/homebrew/bin/dotward",
-		filepath.Join(os.Getenv("HOME"), ".local", "bin", "dotward"),
+		filepath.Join(home, ".local", "bin", "dotward"),
+		filepath.Join(home, "go", "bin", "dotward"),
 	}
 	for _, p := range candidates {
-		if p == "" {
-			continue
-		}
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-			return p, true
+		add(p)
+	}
+
+	if goPath, err := exec.Command("go", "env", "GOPATH").Output(); err == nil {
+		for _, root := range filepath.SplitList(strings.TrimSpace(string(goPath))) {
+			add(filepath.Join(root, "bin", "dotward"))
 		}
 	}
-	return "", false
+
+	return paths
 }
 
 func replaceBinaryAtomically(targetPath string, sourcePath string) error {

@@ -1,6 +1,10 @@
 package updater
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 )
@@ -58,5 +62,58 @@ func TestPreferenceStoreRoundTrip(t *testing.T) {
 	}
 	if got := store2.SkippedVersion(); got != "v1.2.3" {
 		t.Fatalf("skipped version mismatch got=%q want=%q", got, "v1.2.3")
+	}
+}
+
+func TestCheckIgnoresSameVersionPublishedAfterBuild(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{
+			"tag_name":"v1.0.9",
+			"published_at":"2026-04-30T16:00:00Z",
+			"assets":[
+				{"name":"Dotward_v1.0.9_darwin_arm64.app.zip","browser_download_url":"https://example.com/app.zip"},
+				{"name":"dotward_v1.0.9_darwin_arm64","browser_download_url":"https://example.com/dotward"}
+			]
+		}]`)
+	}))
+	defer srv.Close()
+
+	checker := NewChecker()
+	checker.releasesURL = srv.URL
+
+	_, ok, err := checker.Check(context.Background(), "v1.0.9", "2026-04-30T15:55:00Z")
+	if err != nil {
+		t.Fatalf("check update: %v", err)
+	}
+	if ok {
+		t.Fatal("same version should not be reported as an update")
+	}
+}
+
+func TestCheckReportsNewerVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{
+			"tag_name":"v1.0.10",
+			"published_at":"2026-04-30T16:00:00Z",
+			"assets":[
+				{"name":"Dotward_v1.0.10_darwin_arm64.app.zip","browser_download_url":"https://example.com/app.zip"},
+				{"name":"dotward_v1.0.10_darwin_arm64","browser_download_url":"https://example.com/dotward"}
+			]
+		}]`)
+	}))
+	defer srv.Close()
+
+	checker := NewChecker()
+	checker.releasesURL = srv.URL
+
+	release, ok, err := checker.Check(context.Background(), "v1.0.9", "2026-04-30T15:55:00Z")
+	if err != nil {
+		t.Fatalf("check update: %v", err)
+	}
+	if !ok {
+		t.Fatal("newer version should be reported as an update")
+	}
+	if release.TagName != "v1.0.10" {
+		t.Fatalf("release tag mismatch got=%q want=%q", release.TagName, "v1.0.10")
 	}
 }

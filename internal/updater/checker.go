@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -47,8 +48,8 @@ type githubRelease struct {
 	Assets      []githubAsset `json:"assets"`
 }
 
-// Check determines whether a release newer than buildTime is available.
-func (c *Checker) Check(ctx context.Context, buildTime string) (ReleaseInfo, bool, error) {
+// Check determines whether a release newer than currentVersion is available.
+func (c *Checker) Check(ctx context.Context, currentVersion string, buildTime string) (ReleaseInfo, bool, error) {
 	if strings.TrimSpace(buildTime) == "" || buildTime == "unknown" {
 		return ReleaseInfo{}, false, fmt.Errorf("build time is not set")
 	}
@@ -92,7 +93,16 @@ func (c *Checker) Check(ctx context.Context, buildTime string) (ReleaseInfo, boo
 	if latest.TagName == "" || latest.PublishedAt.IsZero() {
 		return ReleaseInfo{}, false, fmt.Errorf("latest release is missing required metadata")
 	}
-	if !latest.PublishedAt.After(builtAt) {
+	comparedVersions := false
+	if cmp, ok := compareVersionTags(latest.TagName, currentVersion); ok {
+		comparedVersions = true
+		if cmp <= 0 {
+			return ReleaseInfo{}, false, nil
+		}
+	} else if currentVersion != "" && currentVersion != "dev" {
+		return ReleaseInfo{}, false, fmt.Errorf("invalid release version metadata: latest=%q current=%q", latest.TagName, currentVersion)
+	}
+	if !comparedVersions && !latest.PublishedAt.After(builtAt) {
 		return ReleaseInfo{}, false, nil
 	}
 
@@ -143,6 +153,52 @@ func selectAppDownloadAsset(assets []githubAsset, arch string) string {
 		}
 	}
 	return bestURL
+}
+
+func compareVersionTags(a string, b string) (int, bool) {
+	av, ok := parseVersionTag(a)
+	if !ok {
+		return 0, false
+	}
+	bv, ok := parseVersionTag(b)
+	if !ok {
+		return 0, false
+	}
+	for i := range av {
+		if av[i] > bv[i] {
+			return 1, true
+		}
+		if av[i] < bv[i] {
+			return -1, true
+		}
+	}
+	return 0, true
+}
+
+func parseVersionTag(tag string) ([3]int, bool) {
+	var version [3]int
+	tag = strings.TrimSpace(strings.TrimPrefix(tag, "v"))
+	if tag == "" {
+		return version, false
+	}
+	if idx := strings.IndexAny(tag, "+-"); idx >= 0 {
+		tag = tag[:idx]
+	}
+	parts := strings.Split(tag, ".")
+	if len(parts) == 0 || len(parts) > len(version) {
+		return version, false
+	}
+	for i, part := range parts {
+		if part == "" {
+			return version, false
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 {
+			return version, false
+		}
+		version[i] = n
+	}
+	return version, true
 }
 
 func selectCLIDownloadAsset(assets []githubAsset, arch string) string {
